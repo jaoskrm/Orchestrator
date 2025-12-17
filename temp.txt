@@ -1,0 +1,117 @@
+Great—next step is to build the smallest working “agent loop” that uses your Docker sandbox for verification, then expand into multi-model orchestration.
+
+## Project skeleton
+
+Create this structure in your repo:
+```
+orchestrator/
+  app.py
+  config.py
+  llm_clients.py
+  runner/
+    docker_runner.py
+  workflows/
+    coding.py
+    reasoning.py
+    science.py
+    rag_qa.py
+  judge/
+    judge.py
+  storage/
+    traces.py
+runs/
+sandbox/
+```
+
+## Step 1: Docker runner module (core tool)
+
+Create `orchestrator/runner/docker_runner.py`:
+```python
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+@dataclass
+class RunResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+
+class DockerSandbox:
+    def __init__(self, container_name: str = "agent-sandbox"):
+        self.container = container_name
+
+    def reset_task_dir(self) -> None:
+        subprocess.run(
+            ["docker", "exec", self.container, "sh", "-lc", "rm -rf /work/task/*"],
+            check=True
+        )
+
+    def copy_task_in(self, task_dir: Path) -> None:
+        # Copy the CONTENTS of task_dir into /work/task
+        src = str(task_dir / ".")
+        subprocess.run(["docker", "cp", src, f"{self.container}:/work/task"], check=True)
+
+    def pytest(self) -> RunResult:
+        p = subprocess.run(
+            ["docker", "exec", self.container, "sh", "-lc",
+             "cd /work/task && python -m pytest -q -p no:cacheprovider"],
+            capture_output=True, text=True
+        )
+        return RunResult(p.returncode, p.stdout, p.stderr)
+```
+
+## Step 2: Minimal “coding workflow” (generate → test → fix)
+
+Create `orchestrator/workflows/coding.py`:
+```python
+from pathlib import Path
+from orchestrator.runner.docker_runner import DockerSandbox
+
+def run_coding_task(task_id: str) -> dict:
+    task_dir = Path("runs") / task_id
+    sb = DockerSandbox()
+
+    sb.reset_task_dir()
+    sb.copy_task_in(task_dir)
+    res = sb.pytest()
+
+    return {
+        "task_id": task_id,
+        "passed": res.exit_code == 0,
+        "stdout": res.stdout,
+        "stderr": res.stderr,
+    }
+```
+
+Create `orchestrator/app.py`:
+```python
+from orchestrator.workflows.coding import run_coding_task
+
+if __name__ == "__main__":
+    out = run_coding_task("task_001")
+    print(out["stdout"])
+    if not out["passed"]:
+        print(out["stderr"])
+```
+
+Run:
+```powershell
+python -m orchestrator.app
+```
+
+At this point, you have the most important foundation: a repeatable verification loop.
+
+## Step 3: Add the first real orchestrator decision
+
+Next, you’ll add:
+- `llm_clients.py` to call your API models (OpenAI/Anthropic/Groq/etc.)
+- A routing function: `route(task) -> workflow + top_k_models`
+- A judge that scores multiple candidate solutions and produces “preference pairs” for later training
+
+## What’s needed from you to continue
+Answer these so the code can be made concrete:
+
+1) Which API provider(s) will you use first (OpenAI, Anthropic, Google, Groq, Together, etc.)?
+2) Do you want to start with **one** orchestrator model (simpler) or **two** (cost-first + quality-first) from day 1?
+3) For `runs/task_002`, do you want the system to **generate tests automatically**, or will you provide tests yourself initially?
