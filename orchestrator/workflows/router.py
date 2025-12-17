@@ -62,53 +62,141 @@ def _build_prompt(user_task: str) -> str:
         f"JSON:"
     )
 
-def _extract_json(raw: str) -> Dict[str, Any]:
-    raw = raw.strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
+def _extract_first_json_object(raw: str) -> dict:
+    s = raw.strip()
 
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"Router did not return JSON. Raw:\n{raw[:500]}")
-    return json.loads(raw[start:end + 1])
+    # Fast path
+    if s.startswith("{"):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+
+    in_str = False
+    esc = False
+    depth = 0
+    start = -1
+
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        else:
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start != -1:
+                        candidate = s[start:i+1]
+                        return json.loads(candidate)
+
+    raise ValueError(f"Router did not return a valid JSON object. Raw: {raw[:500]}")
+
 
 def route_task(user_task: str) -> Dict[str, Any]:
     client = OllamaClient()
     prompt = _build_prompt(user_task)
     raw = client.generate(model=ROUTER_MODEL, prompt=prompt, temperature=0.1)
-    decision = _extract_json(raw)
+    decision = _extract_first_json_object(raw)
 
     wf = decision.get("workflow")
     if wf not in ALLOWED_WORKFLOWS:
         raise ValueError(f"Invalid workflow: {wf}")
 
-    # Fill defaults
-    decision.setdefault("workers", DEFAULT_WORKERS.get(wf, []))
-    decision.setdefault("tools", {"python_sandbox": False, "rag": False})
-    decision.setdefault("controls", {"use_debate": False, "max_rounds": 1})
+    # ---- Coerce types + defaults (LLM-safe) ----
+    workers = decision.get("workers")
+    if not isinstance(workers, list):
+        workers = []
+    tools = decision.get("tools")
+    if not isinstance(tools, dict):
+        tools = {}
+    controls = decision.get("controls")
+    if not isinstance(controls, dict):
+        controls = {}
 
-    # Validate workers
+    # Fill defaults
+    if not workers:
+        workers = DEFAULT_WORKERS.get(wf, [])
+    tools.setdefault("python_sandbox", False)
+    tools.setdefault("rag", False)
+    controls.setdefault("use_debate", False)
+    controls.setdefault("max_rounds", 1)
+
+    decision["workers"] = workers
+    decision["tools"] = tools
+    decision["controls"] = controls
+
+    # ---- Validate workers (keep only allowed) ----
     clean_workers = []
     for w in decision["workers"]:
+        if not isinstance(w, dict):
+            continue
         if w.get("provider") not in ALLOWED_PROVIDERS:
             continue
         if w.get("role") not in ALLOWED_ROLES:
             continue
-        if w["provider"] == "ollama" and w.get("model") not in ALLOWED_OLLAMA_MODELS:
+        if w.get("provider") == "ollama" and w.get("model") not in ALLOWED_OLLAMA_MODELS:
             continue
         clean_workers.append(w)
 
-    # Fallback if router gave unusable workers
     if not clean_workers:
         clean_workers = DEFAULT_WORKERS.get(wf, [])
     decision["workers"] = clean_workers
 
-    # Normalize controls
-    decision["controls"]["max_rounds"] = max(
-        1, min(int(decision["controls"].get("max_rounds", 1)), 4)
-    )
+    # ---- Normalize controls ----
+    try:
+        mr = int(decision["controls"].get("max_rounds", 1))
+    except Exception:
+        mr = 1
+    decision["controls"]["max_rounds"] = max(1, min(mr, 4))
+    decision["controls"]["use_debate"] = bool(decision["controls"].get("use_debate", False))
+
+    # ---- Enforce workflow invariants (THIS fixes your bug) ----
+    if wf == "coding":
+        decision["tools"]["python_sandbox"] = True
+        decision["tools"]["rag"] = False
+        # ensure at least one verifier/critic
+        if not any(w.get("role") in ("verifier", "critic") for w in decision["workers"]):
+            decision["workers"] = decision["workers"] + [
+                {"provider": "ollama", "model": "llama3:latest", "role": "verifier"}
+            ]
+
+    elif wf == "rag_qa":
+        decision["tools"]["rag"] = True
+        decision["tools"]["python_sandbox"] = False
+        # ensure retriever exists
+        if not any(w.get("role") == "retriever" for w in decision["workers"]):
+            decision["workers"] = [
+                {"provider": "ollama", "model": "qwen2.5:7b", "role": "retriever"},
+                *decision["workers"],
+            ]
+
+    elif wf in ("science", "reasoning"):
+        # both are non-rag, non-sandbox by default
+        decision["tools"]["rag"] = False
+        decision["tools"]["python_sandbox"] = False
+
+    # (Optional) science should have verifier
+    if wf == "science":
+        if not any(w.get("role") in ("verifier", "critic") for w in decision["workers"]):
+            decision["workers"] = decision["workers"] + [
+                {"provider": "ollama", "model": "llama3:latest", "role": "verifier"}
+            ]
+
+    # (Optional) reasoning debate default
+    if wf == "reasoning" and decision["controls"].get("use_debate") is None:
+        decision["controls"]["use_debate"] = True
 
     return decision
+

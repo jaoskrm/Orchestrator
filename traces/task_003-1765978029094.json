@@ -1,0 +1,96 @@
+{
+  "run_id": "task_003-1765978029094",
+  "task_id": "task_003",
+  "workflow": "rag_qa",
+  "prompt": "Task: Answer using only the provided documents in runs/<task_id>/context/*.\nIf the answer is not fully supported, reply exactly: Not enough information in provided documents.\nCite chunk ids like [doc.txt#chunkN] after the sentence.\n\nQuestion: What is Nemotron 3 Nano optimized for?",
+  "decision": {
+    "workflow": "rag_qa",
+    "workers": [
+      {
+        "provider": "ollama",
+        "model": "qwen2.5:7b",
+        "role": "retriever"
+      },
+      {
+        "provider": "ollama",
+        "model": "llama3.2:latest",
+        "role": "solver"
+      },
+      {
+        "provider": "ollama",
+        "model": "llama3.2:latest",
+        "role": "verifier"
+      }
+    ],
+    "tools": {
+      "python_sandbox": false,
+      "rag": true
+    },
+    "controls": {
+      "use_debate": false,
+      "max_rounds": 2
+    }
+  },
+  "started_ms": 1765978029094,
+  "finished_ms": 1765978036181,
+  "success": true,
+  "final_answer": "NVIDIA's Nemotron 3 Nano is optimized for edge and agentic workloads.[doc1.txt#chunk0]",
+  "events": [
+    {
+      "ts_ms": 1765978031368,
+      "kind": "retriever_raw",
+      "payload": {
+        "text": "[\"doc1.txt#chunk0\"]"
+      }
+    },
+    {
+      "ts_ms": 1765978031368,
+      "kind": "retriever_parsed",
+      "payload": {
+        "chosen_ids": [
+          "doc1.txt#chunk0"
+        ],
+        "parsed_ok": true
+      }
+    },
+    {
+      "ts_ms": 1765978031368,
+      "kind": "rag_context",
+      "payload": {
+        "context_block_sha256": "c6debf284b76662904b679dd86f5b7f6729c375263012879580947e0e3225cac",
+        "context_block_preview": "[doc1.txt#chunk0]\nNVIDIA’s Nemotron 3 Nano is an 8B model optimized for edge and agentic workloads.",
+        "chosen": [
+          {
+            "id": "doc1.txt#chunk0",
+            "text": "NVIDIA’s Nemotron 3 Nano is an 8B model optimized for edge and agentic workloads."
+          }
+        ]
+      }
+    },
+    {
+      "ts_ms": 1765978031368,
+      "kind": "chosen_chunks",
+      "payload": {
+        "ids": [
+          "doc1.txt#chunk0"
+        ]
+      }
+    },
+    {
+      "ts_ms": 1765978033638,
+      "kind": "solver_draft",
+      "payload": {
+        "model": "llama3.2:latest",
+        "text": "Not enough information in provided documents."
+      }
+    },
+    {
+      "ts_ms": 1765978036181,
+      "kind": "verifier_final",
+      "payload": {
+        "model": "llama3.2:latest",
+        "text": "NVIDIA's Nemotron 3 Nano is optimized for edge and agentic workloads.[doc1.txt#chunk0]"
+      }
+    }
+  ]
+}

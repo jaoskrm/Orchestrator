@@ -51,6 +51,6 @@ from orchestrator.workflows.router import route_task  # add this near the top wi
 if __name__ == "__main__":
     # Default task id; optionally override with: python -m orchestrator.app task_002
     import sys
-    task_id = sys.argv[1] if len(sys.argv) > 1 else "task_002"
+    task_id = sys.argv[1] if len(sys.argv) > 1 else "task_003"
     print(main(task_id))
 
