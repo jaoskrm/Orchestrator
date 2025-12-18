@@ -116,8 +116,3 @@ Deliverable: a full “self-improving orchestration stack” story with ablation
   - pass@k for coding
   - citation validity rate for RAG
   - latency/cost metrics
-- **Planned research contributions**
-
-If you paste your current `readme.md` (or describe your intended evaluation target: HLE-style, coding-only, or enterprise RAG), I can tailor this into a tighter 1-page README plus a separate 6–8 slide presentation outline.
-
-[1](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/152295591/ee8267bd-e5ae-4983-ab34-caeaf4ab51c0/jaoskrm-orchestrator-8a5edab282632443-1.txt)
