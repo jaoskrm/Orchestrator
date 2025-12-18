@@ -54,11 +54,20 @@ def _extract_first_json_object(raw: str) -> Dict[str, Any]:
     raise ValueError(f"Verifier did not return valid JSON. Raw: {s[:400]}")
 
 
-def _format_final(final_obj: Dict[str, Any]) -> str:
-    """Format verifier 'final' object into a short answer (legacy fallback)."""
-    v = (final_obj or {}).get("v_bottom", "")
-    d = (final_obj or {}).get("distance", "")
-    return f"v_bottom: {v}\ndistance: {d}".strip()
+def _format_final(solver_draft: str, verifier_obj: Dict[str, Any], accepted: bool) -> str:
+    """
+    If accepted, return the original solver draft.
+    If rejected, use verifier's suggested corrections.
+    """
+    if accepted:
+        return solver_draft.strip()
+    
+    # Rejected: use verifier's reformatted answer as fallback
+    final_obj = verifier_obj.get("final", {})
+    v = final_obj.get("v_bottom", "")
+    d = final_obj.get("distance", "")
+    return f"v_bottom: {v}\ndistance: {d}\nThis is a fallback answer".strip()
+
 
 
 def run_science_workflow(task_id: str, user_prompt: str, decision: Dict[str, Any]) -> Dict[str, Any]:
@@ -125,28 +134,22 @@ def run_science_workflow(task_id: str, user_prompt: str, decision: Dict[str, Any
     # Template with escaped JSON braces ({{) and single-brace placeholders ({problem})
     verifier_prompt_template = (
         "You are a NUMERIC VERIFIER for math/physics/chem solutions.\n\n"
-        "You MUST recompute every requested numerical result independently from the Problem.\n"
-        "Do NOT trust the candidate's arithmetic or intermediate steps.\n\n"
-        "Return ONLY valid JSON (no markdown, no commentary) with this schema:\n"
+        "Recompute ALL requested numerical results independently.\n"
+        "Do NOT trust the candidate's arithmetic.\n\n"
+        "Return ONLY valid JSON with this schema:\n"
         "{{\n"
         '  "status": "accept" | "reject",\n'
         '  "errors": ["..."],\n'
-        '  "final": {{\n'
-        '    "v_bottom": "<number> m/s",\n'
-        '    "distance": "<number> m"\n'
-        "  }}\n"
         "}}\n\n"
         "Rules:\n"
-        "- Use g = 9.8 m/s^2 unless the problem specifies otherwise.\n"
-        "- Recompute v_bottom and distance from scratch.\n"
-        "- Compute relative error for each final value: |candidate - yours| / max(|yours|, 1e-9).\n"
-        "- If any relative error > 0.02 (2%), set status=\"reject\" and list the mismatch.\n"
-        "- If you did not recompute (or are unsure), set status=\"reject\".\n"
-        "- Always fill the 'final' fields with YOUR recomputed best values + units.\n"
-        "- Keep 'errors' short (max 3 bullets). Do NOT write a full derivation.\n\n"
+        "- Recompute every numerical answer from the Problem.\n"
+        "- If any answer differs by >2% relative error, set status=\"reject\" and list errors.\n"
+        "- Keep 'errors' short (max 3 bullets).\n"
+        "- Do NOT reformat the answer; only validate it.\n\n"
         "Problem:\n{problem}\n\n"
         "Candidate solution:\n{candidate}\n"
     )
+
 
     draft = _call(solver, solve_prompt, temperature=0.2)
     tracer.log("solver_draft", model=solver["model"], text=draft[:2000])
@@ -166,7 +169,8 @@ def run_science_workflow(task_id: str, user_prompt: str, decision: Dict[str, Any
     final_obj = vobj.get("final") if isinstance(vobj.get("final"), dict) else {}
 
     if status == "accept":
-        final_text = _format_final(final_obj)
+        # Preserve the FULL solver draft, not verifier's reformatted output
+        final_text = draft.strip()  # Use original solver_draft
         tracer.log("solver_final", model=solver["model"], text=final_text[:2000])
         tracer.set_result(success=True, final_answer=final_text)
         trace_path = tracer.flush()
@@ -178,8 +182,8 @@ def run_science_workflow(task_id: str, user_prompt: str, decision: Dict[str, Any
     rounds_left = max_rounds - 1
     repair_attempts_allowed = 1 if not use_debate else max(1, rounds_left)
 
-    last_final_text = _format_final(final_obj)
     accepted = False
+    last_final_text = draft.strip()  # Default to original draft
 
     for _attempt in range(1, repair_attempts_allowed + 1):
         errors = vobj.get("errors", [])
@@ -188,12 +192,9 @@ def run_science_workflow(task_id: str, user_prompt: str, decision: Dict[str, Any
 
         revise_prompt = (
             "Revise your answer based on the verifier feedback.\n"
-            "Output ONLY the final answers in exactly this format:\n"
-            "v_bottom: <number> m/s\n"
-            "distance: <number> m\n\n"
+            "Provide ALL requested numerical results with units.\n\n"
             f"Problem:\n{user_prompt}\n\n"
-            "Verifier errors:\n- " + "\n- ".join(str(e) for e in errors) + "\n\n"
-            f"Verifier suggested final (use if correct):\n{last_final_text}\n"
+            "Verifier errors:\n- " + "\n- ".join(str(e) for e in errors) + "\n"
         )
 
         revised = _call(solver, revise_prompt, temperature=0.2)
@@ -208,12 +209,14 @@ def run_science_workflow(task_id: str, user_prompt: str, decision: Dict[str, Any
 
         vobj = _extract_first_json_object(vraw2)
         status2 = str(vobj.get("status", "")).strip().lower()
-        final_obj2 = vobj.get("final") if isinstance(vobj.get("final"), dict) else {}
-        last_final_text = _format_final(final_obj2)
 
         if status2 == "accept":
             accepted = True
+            last_final_text = revised.strip()  # Use revised solver output
             break
+
+        # Update last_final_text with latest attempt
+        last_final_text = revised.strip()
 
         if not use_debate:
             break
@@ -222,3 +225,5 @@ def run_science_workflow(task_id: str, user_prompt: str, decision: Dict[str, Any
     tracer.set_result(success=accepted, final_answer=last_final_text)
     trace_path = tracer.flush()
     return {"task_id": task_id, "answer": last_final_text, "trace": str(trace_path)}
+
+

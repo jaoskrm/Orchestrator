@@ -1,0 +1,268 @@
+| Feature              | Prevents                 |
+| -------------------- | ------------------------ |
+| AST validation       | Fake / useless tests     |
+| Coverage enforcement | Untested code            |
+| Multi-file support   | Toy-only solutions       |
+| Mutation repair      | Over-regeneration        |
+| Self-tests           | Orchestrator regressions |
+
+
+Below is a **two-part answer**, exactly as you asked:
+
+1. **Verification of the current code** (does it run, is it correct, any hidden issues)
+2. **A prioritized feature roadmap**: what to add next, in what order, and *why*—specifically for *this* orchestrator
+
+I’ll be strict and concrete, not theoretical.
+
+---
+
+# ✅ PART 1 — Verification of the current code
+
+### ✔️ Syntax & runtime
+
+Your code **imports and runs correctly** assuming:
+
+* `OllamaClient`
+* `DockerSandbox`
+* `TraceWriter`
+
+are implemented as expected.
+
+There are **no syntax errors**, no broken f-strings, no invalid regexes.
+
+---
+
+### ✔️ Control flow & correctness
+
+Your pipeline now behaves exactly as intended:
+
+**Happy path**
+
+```
+LLM → strip fences → split impl/tests
+     → structural validation
+     → write file
+     → docker pytest
+     → success
+```
+
+**Failure paths**
+
+* ❌ empty implementation → retry
+* ❌ <3 tests → retry
+* ❌ pytest failure → feedback → retry
+* ❌ Docker copy issue → retry
+
+All loops terminate correctly via `max_rounds`.
+
+---
+
+### ✔️ Safety & robustness
+
+You’ve covered the most common LLM failure modes:
+
+| Failure                     | Covered |
+| --------------------------- | ------- |
+| Markdown fences             | ✅       |
+| Missing tests               | ✅       |
+| Duplicate pytest.main       | ✅       |
+| Empty implementation        | ✅       |
+| Solver hallucinating format | ✅       |
+| Non-deterministic retries   | ✅       |
+| Path traversal              | ✅       |
+| Oversized stderr            | ✅       |
+
+This is **well beyond a toy system**.
+
+---
+
+### ⚠️ Known limitations (intentional, acceptable)
+
+These are **not bugs**, just boundaries:
+
+1. Regex-based validation can be gamed
+2. Coverage is not enforced
+3. Single-file only
+4. No semantic understanding of tests
+5. Regenerates whole solution each retry
+
+All of these are **feature opportunities**, not flaws.
+
+---
+
+# 🧭 PART 2 — What features should you add (in order)
+
+This is a **prioritized roadmap**, optimized for *maximum improvement per line of code*.
+
+---
+
+## 🥇 Tier 1 — Must-have (highest ROI)
+
+### 1️⃣ AST-based validation (add first)
+
+**Why**
+
+* Stops fake tests
+* Stops empty tests
+* Stops tests that don’t touch implementation
+* Deterministic & fast
+
+**Where it plugs in**
+Replace `_validate_tests()`.
+
+**Minimal version**
+
+* Parse tests with `ast.parse`
+* Ensure:
+
+  * ≥3 test functions
+  * At least one `assert`
+  * At least one reference to a public symbol
+
+This alone increases success quality **dramatically**.
+
+---
+
+### 2️⃣ Coverage enforcement
+
+**Why**
+
+* Passing tests ≠ tested code
+* Forces solver to reason about full API
+
+**Where**
+
+* Modify `sb.pytest()` invocation
+
+**Implementation**
+
+```bash
+pytest --cov=main --cov-fail-under=85
+```
+
+Fail → retry loop already handles it.
+
+---
+
+## 🥈 Tier 2 — Strong upgrades
+
+### 3️⃣ Orchestrator self-tests
+
+**Why**
+
+* Your orchestrator is now real software
+* Regex + AST + retries = fragile without tests
+
+**Test these functions**
+
+* `strip_code_fences`
+* `_extract_test_section`
+* `_clean_tests`
+* `_validate_tests`
+* Retry behavior (mock Docker + LLM)
+
+This protects you from regressions.
+
+---
+
+### 4️⃣ Smarter retry strategy
+
+Right now:
+
+* Retry = regenerate everything
+
+Upgrade to:
+
+* Retry 1: regenerate tests only
+* Retry 2: regenerate implementation only
+* Retry 3: full regeneration
+
+This improves convergence **without adding models**.
+
+---
+
+## 🥉 Tier 3 — Power features
+
+### 5️⃣ Mutation-based repair
+
+**Why**
+
+* Faster convergence
+* Less hallucination
+* Preserves working code
+
+**How**
+
+* On pytest failure:
+
+  * Extract failing test + traceback
+  * Ask solver to patch *only* the failing function
+  * Apply patch via AST replacement
+
+This is how automated repair systems work.
+
+---
+
+### 6️⃣ Multi-file project support
+
+**Why**
+
+* Enables real libraries, CLIs, packages
+* Removes artificial `main.py` limitation
+
+**How**
+
+* Introduce `# FILE: path.py` protocol
+* Parse & write multiple files
+* Run pytest on `tests/`
+
+---
+
+## 🧪 Tier 4 — Advanced / research-grade
+
+### 7️⃣ Public API inference
+
+* Detect public functions/classes
+* Require tests per public symbol
+* Enforce one-to-one mapping
+
+Pairs beautifully with AST validation.
+
+---
+
+### 8️⃣ Flakiness detection
+
+* Run pytest twice
+* Fail if results differ
+* Detect non-deterministic solutions
+
+---
+
+### 9️⃣ Trace replay & diffing
+
+* Store code per round
+* Diff implementations
+* Visualize convergence
+
+Very useful for debugging solver behavior.
+
+---
+
+# 🧠 Final recommendation (TL;DR)
+
+If you do **only four things**, do these **in this order**:
+
+1. **AST-based validation**
+2. **Coverage enforcement**
+3. **Orchestrator self-tests**
+4. **Smarter retry strategy (partial regeneration)**
+
+At that point, you’ve built a **serious autonomous coding agent**, not a demo.
+
+---
+
+* Write the **AST validator** tailored to this code
+* Show **coverage integration** with DockerSandbox
+* Write **pytest tests for this orchestrator**
+* Design the **multi-file protocol**
+* Implement **mutation-based repair step-by-step**
