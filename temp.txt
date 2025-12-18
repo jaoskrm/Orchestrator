@@ -115,3 +115,64 @@ Answer these so the code can be made concrete:
 1) Which API provider(s) will you use first (OpenAI, Anthropic, Google, Groq, Together, etc.)?
 2) Do you want to start with **one** orchestrator model (simpler) or **two** (cost-first + quality-first) from day 1?
 3) For `runs/task_002`, do you want the system to **generate tests automatically**, or will you provide tests yourself initially?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ALLOWED_WORKFLOWS = {"coding", "reasoning", "science", "rag_qa"}
+ALLOWED_ROLES = {"solver", "critic", "verifier", "retriever"}
+ALLOWED_PROVIDERS = {"ollama", "openai", "anthropic", "gemini", "groq"}
+
+ALLOWED_OLLAMA_MODELS = {"llama3.2:latest", "qwen2.5:7b", "llama3:latest"}
+After parsing:
+
+python
+wf = decision.get("workflow")
+if wf not in ALLOWED_WORKFLOWS:
+    raise ValueError(f"Invalid workflow: {wf}")
+
+# Fill defaults
+decision.setdefault("workers", DEFAULT_WORKERS.get(wf, []))
+decision.setdefault("tools", {"python_sandbox": False, "rag": False})
+decision.setdefault("controls", {"use_debate": False, "max_rounds": 1})
+
+# Validate workers
+clean_workers = []
+for w in decision["workers"]:
+    if w.get("provider") not in ALLOWED_PROVIDERS:
+        continue
+    if w.get("role") not in ALLOWED_ROLES:
+        continue
+    if w["provider"] == "ollama" and w.get("model") not in ALLOWED_OLLAMA_MODELS:
+        continue
+    clean_workers.append(w)
+
+# If router produced junk, fall back to defaults
+if not clean_workers:
+    clean_workers = DEFAULT_WORKERS.get(wf, [])
+decision["workers"] = clean_workers
+
+# Normalize controls
+decision["controls"]["max_rounds"] = max(1, min(int(decision["controls"].get("max_rounds", 1)), 4))
+
+
+
+

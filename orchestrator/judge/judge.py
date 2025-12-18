@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Optional, Set
+import json
 
 _CITATION_RE = re.compile(r"\[([^\[\]]+)\]")  # captures inside [ ... ]
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
-
 
 def _get_last_event(events: List[Dict[str, Any]], kind: str) -> Optional[Dict[str, Any]]:
     for e in reversed(events):
@@ -33,10 +33,24 @@ def _is_nonclaim_line(line: str) -> bool:
     low = s.lower()
 
     # Meta/commentary lines that should never require citations
-    if low.startswith(("note:", "notes:", "rule ", "rules:", "format:", "citation:", "citations:", "as per ","the answer is", "here is the answer", "answer:", "answer to")):
+    if low.startswith(
+        (
+            "note:",
+            "notes:",
+            "rule ",
+            "rules:",
+            "format:",
+            "citation:",
+            "citations:",
+            "as per ",
+            "the answer is",
+            "here is the answer",
+            "answer:",
+            "answer to",
+        )
+    ):
         return True
     if (s.startswith("(") and s.endswith(")")) or (s.startswith("[") and s.endswith("]") and len(s) < 80):
-        # parenthetical notes or short bracket-only lines
         return True
 
     # separators / headings
@@ -82,6 +96,40 @@ def _merge_citation_only_lines(text: str) -> str:
 
         out.append(s)
     return "\n".join(out)
+
+def _parse_verifier_status(events: List[Dict[str, Any]]) -> Optional[str]:
+    # Prefer last verifier-like event
+    verifier_evt = _get_last_event(events, "verifier") or _get_last_event(events, "verifier_recheck")
+    payload = (verifier_evt or {}).get("payload", {}) or {}
+    # payload might be dict OR might be {"text": "...json..."} depending on logger
+    if isinstance(payload, dict):
+        # Case A: you logged parsed JSON directly into payload
+        if isinstance(payload.get("status"), str):
+            return payload.get("status").strip().lower()
+        # Case B: you logged text that contains JSON
+        txt = payload.get("text")
+        if isinstance(txt, str) and txt.strip().startswith("{"):
+            try:
+                obj = json.loads(txt)
+                if isinstance(obj.get("status"), str):
+                    return obj["status"].strip().lower()
+            except Exception:
+                return None
+    return None
+
+def _looks_like_units(text: str) -> bool:
+    return bool(re.search(r"(?:\d+(?:\.\d+)?(?:e[+-]?\d+)?)\s*(m/s|m/s\^2|kg|j|n|pa|hz|cm|mm|m|s|h)\b", text.lower()))
+
+def _count_numbers(text: str) -> int:
+    return len(re.findall(r"\d+(?:\.\d+)?", text or ""))
+
+
+
+def _looks_like_numeric_answer(text: str) -> bool:
+    # crude: has at least one digit and not just a year; good enough for v1 scoring
+    if not text:
+        return False
+    return bool(re.search(r"\d", text))
 
 
 def judge_trace(trace: Dict[str, Any]) -> Dict[str, Any]:
@@ -199,38 +247,84 @@ def judge_trace(trace: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
 
-    # --- REASONING / SCIENCE: structural quality checks (v0) ---
+    # --- REASONING / SCIENCE ---
+
     if workflow in ("reasoning", "science"):
         has_solver_final = _get_event(events, "solver_final") is not None
         has_solver_draft = _get_event(events, "solver_draft") is not None
-        has_verifier = _get_event(events, "verifier") is not None
+
+        has_verifier = (_get_event(events, "verifier") is not None) or (_get_event(events, "verifier_recheck") is not None)
         has_critic = _get_event(events, "critic") is not None
 
-        nontrivial = len(final_answer.strip()) >= 40
-        passed = (has_solver_final or has_solver_draft) and nontrivial
+        verifier_status = _parse_verifier_status(events)
+
+        if verifier_status == "reject":
+            return {
+                "passed": False,
+                "score": 0.0,
+                "reason": "verifier_reject",
+                "signals": {
+                    "has_solver_draft": has_solver_draft,
+                    "has_solver_final": has_solver_final,
+                    "has_verifier": has_verifier,
+                    "verifier_status": verifier_status,
+                    "verifier_parse_failed": bool(has_verifier and verifier_status is None),
+                    "answer_len": len(final_answer.strip()),
+                },
+            }
+
+        verifier_accept = (verifier_status == "accept")
+
+        has_numeric = _looks_like_numeric_answer(final_answer)
+        has_units = _looks_like_units(final_answer)
+
+        passed = bool(
+            verifier_accept
+            or ((has_solver_final or has_solver_draft) and has_numeric and has_units)
+        )
+
+        prompt = trace.get("prompt", "") or ""
+        multipart = ("1)" in prompt and "2)" in prompt) or (prompt.count("?") >= 2)
 
         score = 0.0
+        reason = "failed_contract"
+
+        if (workflow == "science") and (not verifier_accept) and multipart:
+            if _count_numbers(final_answer) < 2:
+                passed = False
+                reason = "incomplete_numeric_answer"
+
         if passed:
-            score = 0.7
+            score = 0.6
+            reason = "contract_ok"
+
+            if verifier_accept:
+                score = max(score, 0.95)
+                reason = "verifier_accept"
+
             if has_verifier:
-                score += 0.15
+                score = min(1.0, score + 0.03)
             if has_critic:
-                score += 0.15
-            score = min(score, 1.0)
+                score = min(1.0, score + 0.02)
 
         return {
             "passed": bool(passed),
             "score": float(score),
-            "reason": "structure_ok" if passed else "missing solver output / trivial answer",
+            "reason": reason,
             "signals": {
+                "verifier_parse_failed": bool(has_verifier and verifier_status is None),
+                "multipart": multipart,
                 "has_solver_draft": has_solver_draft,
                 "has_solver_final": has_solver_final,
                 "has_verifier": has_verifier,
                 "has_critic": has_critic,
+                "verifier_status": verifier_status,
+                "verifier_accept": verifier_accept,
+                "has_numeric": has_numeric,
+                "has_units": has_units,
                 "answer_len": len(final_answer.strip()),
             },
         }
-
     # --- FALLBACK ---
     passed = bool(trace.get("success", False))
     return {
@@ -239,3 +333,4 @@ def judge_trace(trace: Dict[str, Any]) -> Dict[str, Any]:
         "reason": "trace.success (fallback)",
         "signals": {"workflow": workflow},
     }
+

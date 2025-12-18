@@ -7,7 +7,13 @@ from orchestrator.config import ROUTER_MODEL, DEFAULT_WORKERS
 ALLOWED_WORKFLOWS = {"coding", "reasoning", "science", "rag_qa"}
 ALLOWED_ROLES = {"solver", "critic", "verifier", "retriever"}
 ALLOWED_PROVIDERS = {"ollama", "openai", "anthropic", "gemini", "groq"}
-ALLOWED_OLLAMA_MODELS = {"llama3.2:latest", "qwen2.5:7b", "llama3:latest"}
+ALLOWED_OLLAMA_MODELS = {
+    "llama3.2:latest",
+    "qwen2.5:7b",
+    "qwen2.5:14b-instruct",
+    "llama3:latest",
+}
+
 
 ROUTER_SYSTEM = """You are a routing controller for a multi-model agent system.
 
@@ -154,6 +160,19 @@ def route_task(user_task: str) -> Dict[str, Any]:
         clean_workers = DEFAULT_WORKERS.get(wf, [])
     decision["workers"] = clean_workers
 
+    # Ensure required roles exist (post-validation)
+    if wf == "science" and not any(w.get("role") == "solver" for w in decision["workers"]):
+        decision["workers"] = DEFAULT_WORKERS.get("science", []) + decision["workers"]
+
+    if wf == "reasoning" and not any(w.get("role") == "solver" for w in decision["workers"]):
+        decision["workers"] = DEFAULT_WORKERS.get("reasoning", []) + decision["workers"]
+
+    if wf == "coding" and not any(w.get("role") == "solver" for w in decision["workers"]):
+        decision["workers"] = DEFAULT_WORKERS.get("coding", []) + decision["workers"]
+
+    if wf == "rag_qa" and not any(w.get("role") == "solver" for w in decision["workers"]):
+        decision["workers"] = DEFAULT_WORKERS.get("rag_qa", []) + decision["workers"]
+
     # ---- Normalize controls ----
     try:
         mr = int(decision["controls"].get("max_rounds", 1))
@@ -162,41 +181,38 @@ def route_task(user_task: str) -> Dict[str, Any]:
     decision["controls"]["max_rounds"] = max(1, min(mr, 4))
     decision["controls"]["use_debate"] = bool(decision["controls"].get("use_debate", False))
 
-    # ---- Enforce workflow invariants (THIS fixes your bug) ----
+    # ---- Enforce workflow invariants ----
+
     if wf == "coding":
         decision["tools"]["python_sandbox"] = True
         decision["tools"]["rag"] = False
-        # ensure at least one verifier/critic
         if not any(w.get("role") in ("verifier", "critic") for w in decision["workers"]):
-            decision["workers"] = decision["workers"] + [
-                {"provider": "ollama", "model": "llama3:latest", "role": "verifier"}
-            ]
+            decision["workers"].append({"provider": "ollama", "model": "llama3:latest", "role": "verifier"})
 
     elif wf == "rag_qa":
         decision["tools"]["rag"] = True
         decision["tools"]["python_sandbox"] = False
-        # ensure retriever exists
         if not any(w.get("role") == "retriever" for w in decision["workers"]):
-            decision["workers"] = [
-                {"provider": "ollama", "model": "qwen2.5:7b", "role": "retriever"},
-                *decision["workers"],
-            ]
+            decision["workers"] = [{"provider": "ollama", "model": "qwen2.5:7b", "role": "retriever"}] + decision["workers"]
 
-    elif wf in ("science", "reasoning"):
-        # both are non-rag, non-sandbox by default
+    elif wf == "science":
         decision["tools"]["rag"] = False
         decision["tools"]["python_sandbox"] = False
+        decision["controls"]["use_debate"] = bool(decision["controls"].get("use_debate", False))
+        decision["controls"]["max_rounds"] = int(decision["controls"].get("max_rounds", 2))
 
-    # (Optional) science should have verifier
-    if wf == "science":
+        # science MUST have verifier/critic
         if not any(w.get("role") in ("verifier", "critic") for w in decision["workers"]):
-            decision["workers"] = decision["workers"] + [
-                {"provider": "ollama", "model": "llama3:latest", "role": "verifier"}
-            ]
+            decision["workers"].append({"provider": "ollama", "model": "llama3:latest", "role": "verifier"})
 
-    # (Optional) reasoning debate default
-    if wf == "reasoning" and decision["controls"].get("use_debate") is None:
-        decision["controls"]["use_debate"] = True
+    elif wf == "reasoning":
+        decision["tools"]["rag"] = False
+        decision["tools"]["python_sandbox"] = False
+        # reasoning debate default ON unless explicitly false
+        decision["controls"]["use_debate"] = bool(decision["controls"].get("use_debate", True))
+        if decision["controls"]["use_debate"] and not any(w.get("role") == "critic" for w in decision["workers"]):
+            decision["workers"].append({"provider": "ollama", "model": "llama3:latest", "role": "critic"})
 
     return decision
+
 
