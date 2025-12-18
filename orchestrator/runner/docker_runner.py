@@ -27,10 +27,25 @@ class DockerSandbox:
             check=True
         )
 
-    def pytest(self) -> RunResult:
+    def pytest(self, *files: str) -> RunResult:
+        """
+        Run pytest in the container's /work/task directory.
+        
+        Args:
+            *files: Optional specific files to test (e.g., "main.py", "test_*.py").
+                   If not provided, pytest uses its default discovery.
+        
+        Returns:
+            RunResult with exit code, stdout, and stderr
+        """
+        # Build the pytest command
+        pytest_cmd = "cd /work/task && python -m pytest -q -p no:cacheprovider"
+        if files:
+            # Add specific files to the command
+            pytest_cmd += " " + " ".join(files)
+        
         p = subprocess.run(
-            ["docker", "exec", "-u", "sandbox", self.container, "sh", "-lc",
-             "cd /work/task && python -m pytest -q -p no:cacheprovider"],
+            ["docker", "exec", "-u", "sandbox", self.container, "sh", "-lc", pytest_cmd],
             capture_output=True, text=True
         )
         return RunResult(p.returncode, p.stdout, p.stderr)

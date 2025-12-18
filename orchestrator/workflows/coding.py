@@ -8,9 +8,6 @@ from orchestrator.storage.traces import TraceWriter
 
 # === EXAMPLES (shown only in round 1) ===
 CODING_EXAMPLE = """# === IMPLEMENTATION ===
-from dataclasses import dataclass
-
-@dataclass
 class Calculator:
     def add(self, a: int, b: int) -> int:
         if not isinstance(a, int) or not isinstance(b, int):
@@ -43,9 +40,9 @@ def strip_code_fences(s: str) -> str:
     """Remove markdown code fences. FIX: properly handle string split."""
     s = s.strip()
     if s.startswith("```"):
-        s = s.split("\n", 1) if "\n" in s else s  # FIX:  not just split()
+        s = s.split("\n", 1)[1] if "\n" in s else s
         if s.rstrip().endswith("```"):
-            s = s.rsplit("```")
+            s = s.rsplit("```", 1)[0]
     return s.strip()
 
 
@@ -54,8 +51,11 @@ def _extract_test_section(code: str) -> tuple[str, str]:
     # Primary: explicit markers
     if "# === TESTS ===" in code:
         parts = code.split("# === TESTS ===", 1)
-        impl = parts.replace("# === IMPLEMENTATION ===", "").strip()
-        tests = parts.strip()
+        # FIX: parts is a list, need to index it
+        impl = parts[0]
+        # FIX: Strip marker more defensively with regex
+        impl = re.sub(r'^# === IMPLEMENTATION ===\s*', '', impl, flags=re.MULTILINE).strip()
+        tests = parts[1].strip()
         return impl, tests
     
     # Fallback: detect pytest import (but avoid docstrings)
@@ -75,20 +75,25 @@ def _clean_tests(tests: str) -> str:
     tests = re.sub(r'^import pytest\s*$', '', tests, flags=re.MULTILINE).strip()
     
     # Remove any existing if __name__ blocks (we add our own)
+    # FIX: Simpler regex - nuke everything after if __name__
     tests = re.sub(
-        r"if __name__\s*==\s*['\"]__main__['\"]:\s*.*",
+        r"if __name__\s*==\s*['\"]__main__['\"]:\s*[\s\S]*$",
         "",
         tests,
-        flags=re.DOTALL | re.MULTILINE
     ).strip()
     
     return tests
 
 
 def _validate_tests(tests: str) -> bool:
-    """Ensure at least 3 test functions exist. FIX: structural validation."""
+    """Ensure at least 3 test functions exist. FIX: structural validation.
+    
+    Note: This can be gamed with empty test_ functions that just pass.
+    For stronger guarantees, use AST inspection in the future.
+    """
     test_funcs = re.findall(r'^\s*def (test_\w+)\(', tests, re.MULTILINE)
-    return len(test_funcs) >= 3
+    has_pytest = "pytest" in tests
+    return len(test_funcs) >= 3 and has_pytest
 
 
 def _write_full_code(task_dir: Path, implementation: str, tests: str) -> None:
@@ -136,7 +141,7 @@ def run_coding_workflow(task_id: str, user_prompt: str, decision: Dict[str, Any]
 
         # FIX: examples only in round 1, concise prompt after
         if r == 1:
-            example_section = f"\n\nEXAMPLE FORMAT:\n{CODING_EXAMPLE}\n"
+            example_section = f"\nEXAMPLE FORMAT:\n{CODING_EXAMPLE}\n"
         else:
             example_section = ""
 
@@ -152,7 +157,9 @@ FORMAT (strict):
 RULES:
 - Minimum 3 test functions covering public API
 - Test edge cases + errors with pytest.raises()
-- Use type hints and docstrings{example_section}
+- Use type hints and docstrings
+
+{example_section}
 
 TASK: {user_prompt}
 
@@ -162,16 +169,27 @@ PREVIOUS FAILURE (FIX THIS):
 OUTPUT: Executable Python only. No markdown."""
 
         full_code = _call_worker(solver, solver_prompt, temperature=0.1 if r > 1 else 0.2)
-        full_code = strip_code_fences(full_code)  # FIX: actually call it
+        full_code = strip_code_fences(full_code)
         
         tracer.log("solver_full_code", round=r, model=solver["model"], chars=len(full_code))
         
         implementation, tests = _extract_test_section(full_code)
         
+        # FIX: Fail fast on empty implementation
+        if not implementation.strip():
+            tracer.log("implementation_validation_fail", reason="Empty implementation generated")
+            last_err = "ERROR: Empty implementation generated"
+            continue
+        
         # FIX: validate structure before writing
+        test_count = len(re.findall(r'^\s*def (test_\w+)\(', tests, re.MULTILINE))
+        
+        # FIX: Log test count for observability
+        tracer.log("test_validation", test_count=test_count, has_pytest="pytest" in tests)
+        
         if not _validate_tests(tests):
-            tracer.log("test_validation_fail", reason="<3 test functions found")
-            last_err = "ERROR: Generated code has insufficient tests (need >=3 test_ functions)"
+            tracer.log("test_validation_fail", reason="<3 test functions found or missing pytest import")
+            last_err = "ERROR: Generated code has insufficient tests (need >=3 test_ functions with pytest)"
             continue
         
         _write_full_code(task_dir, implementation, tests)
@@ -186,11 +204,16 @@ OUTPUT: Executable Python only. No markdown."""
         sb.reset_task_dir()
         sb.copy_task_in(task_dir)
         
-        # FIX: verify file exists in container before pytest
-        verify_result = sb._run_cmd("ls -la /work/task/main.py")
-        tracer.log("container_verify", output=verify_result)
+        # FIX: verify file exists locally before running pytest
+        # Note: This checks host FS, not container FS. If Docker copy issues arise, 
+        # this is the first place to investigate.
+        if not (task_dir / "main.py").exists():
+            tracer.log("container_verify", error="main.py not found in task_dir")
+            last_err = "ERROR: main.py was not written successfully"
+            continue
         
-        res = sb.pytest()
+        # FIX: Explicitly tell pytest to run main.py (pytest doesn't auto-discover it)
+        res = sb.pytest("main.py")
         
         # FIX: capture both head and tail of output
         stdout_head = res.stdout[:2000] if len(res.stdout) > 2000 else res.stdout
