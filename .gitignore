@@ -1,3 +1,25 @@
-runs/  
-traces/old
-__pycache__
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+traces/
+runs/*/tests/__pycache__/
+sandbox/.pytest_cache/

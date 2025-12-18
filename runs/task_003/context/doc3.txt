@@ -1,0 +1,1 @@
+Orchestrator‑8B is an 8B RL-tuned controller that routes tasks to tools and larger models.

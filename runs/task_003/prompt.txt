@@ -1,0 +1,5 @@
+Task: Answer using only the provided documents in runs/<task_id>/context/*.
+If the answer is not fully supported, reply exactly: Not enough information in provided documents.
+Cite chunk ids like [doc.txt#chunkN] after the sentence.
+
+Question: What is Nemotron 3 Nano optimized for?

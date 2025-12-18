@@ -13,17 +13,58 @@ def _get_last_event(events: List[Dict[str, Any]], kind: str) -> Optional[Dict[st
             return e
     return None
 
-
 def _get_event(events: List[Dict[str, Any]], kind: str) -> Optional[Dict[str, Any]]:
     for e in events:
         if e.get("kind") == kind:
             return e
     return None
 
-
 def _extract_citations(text: str) -> Set[str]:
     return {m.group(1).strip() for m in _CITATION_RE.finditer(text or "") if m.group(1).strip()}
 
+def _extract_first_json_object_from_text(txt: str) -> Optional[Dict[str, Any]]:
+    s = (txt or "").strip()
+    if not s:
+        return None
+
+    # Fast path
+    if s.startswith("{"):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+
+    in_str = False
+    esc = False
+    depth = 0
+    start = -1
+
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        else:
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                if depth > 0:
+                    depth -= 1
+                if depth == 0 and start != -1:
+                    try:
+                        return json.loads(s[start : i + 1])
+                    except Exception:
+                        return None
+    return None
 
 def _is_nonclaim_line(line: str) -> bool:
     s = line.strip()
@@ -73,7 +114,6 @@ def _is_nonclaim_line(line: str) -> bool:
 
     return False
 
-
 def _merge_citation_only_lines(text: str) -> str:
     """
     If the model outputs:
@@ -97,24 +137,31 @@ def _merge_citation_only_lines(text: str) -> str:
         out.append(s)
     return "\n".join(out)
 
+
 def _parse_verifier_status(events: List[Dict[str, Any]]) -> Optional[str]:
-    # Prefer last verifier-like event
-    verifier_evt = _get_last_event(events, "verifier") or _get_last_event(events, "verifier_recheck")
+    # 1) If numeric_oracle exists, treat as authoritative accept for science-style tasks.
+    # This is robust even if you later stop emitting a "verifier" event from Python.
+    if _get_last_event(events, "numeric_oracle") is not None:
+        return "accept"
+
+    # 2) Prefer the latest verifier-like event
+    verifier_evt = _get_last_event(events, "verifier_recheck") or _get_last_event(events, "verifier")
     payload = (verifier_evt or {}).get("payload", {}) or {}
-    # payload might be dict OR might be {"text": "...json..."} depending on logger
-    if isinstance(payload, dict):
-        # Case A: you logged parsed JSON directly into payload
-        if isinstance(payload.get("status"), str):
-            return payload.get("status").strip().lower()
-        # Case B: you logged text that contains JSON
-        txt = payload.get("text")
-        if isinstance(txt, str) and txt.strip().startswith("{"):
-            try:
-                obj = json.loads(txt)
-                if isinstance(obj.get("status"), str):
-                    return obj["status"].strip().lower()
-            except Exception:
-                return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    # Case A: status logged directly as a field
+    if isinstance(payload.get("status"), str):
+        return payload["status"].strip().lower()
+
+    # Case B: JSON logged as text (LLM or python)
+    txt = payload.get("text")
+    if isinstance(txt, str):
+        obj = _extract_first_json_object_from_text(txt)
+        if isinstance(obj, dict) and isinstance(obj.get("status"), str):
+            return obj["status"].strip().lower()
+
     return None
 
 def _looks_like_units(text: str) -> bool:
@@ -122,8 +169,6 @@ def _looks_like_units(text: str) -> bool:
 
 def _count_numbers(text: str) -> int:
     return len(re.findall(r"\d+(?:\.\d+)?", text or ""))
-
-
 
 def _looks_like_numeric_answer(text: str) -> bool:
     # crude: has at least one digit and not just a year; good enough for v1 scoring

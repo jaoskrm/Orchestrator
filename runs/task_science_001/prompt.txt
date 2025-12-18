@@ -1,0 +1,7 @@
+A 2.0 kg box is launched with an initial speed of 8.0 m/s up a 30° incline. 
+The coefficient of kinetic friction between the box and incline is μk = 0.20.
+
+1) How far up the incline does the box travel before stopping?
+2) What is the box's speed when it returns to the starting point?
+
+Use g = 9.8 m/s². Give numerical answers with units.

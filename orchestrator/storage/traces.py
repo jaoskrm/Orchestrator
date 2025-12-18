@@ -2,19 +2,23 @@ import json
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
+
 
 TRACE_DIR = Path("traces")
 TRACE_DIR.mkdir(exist_ok=True)
 
+
 def now_ms() -> int:
     return int(time.time() * 1000)
+
 
 @dataclass
 class TraceEvent:
     ts_ms: int
     kind: str
     payload: Dict[str, Any]
+
 
 @dataclass
 class TraceRecord:
@@ -27,7 +31,8 @@ class TraceRecord:
     finished_ms: Optional[int]
     success: Optional[bool]
     final_answer: Optional[str]
-    events: list
+    events: List[Dict[str, Any]]
+
 
 class TraceWriter:
     def __init__(self, task_id: str, workflow: str, prompt: str, decision: Dict[str, Any]):
@@ -37,7 +42,7 @@ class TraceWriter:
         self.decision = decision
         self.run_id = f"{task_id}-{now_ms()}"
         self.started_ms = now_ms()
-        self.events: list[TraceEvent] = []
+        self.events: List[TraceEvent] = []
         self.final_answer: Optional[str] = None
         self.success: Optional[bool] = None
 

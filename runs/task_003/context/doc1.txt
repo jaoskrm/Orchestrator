@@ -1,0 +1,1 @@
+NVIDIA’s Nemotron 3 Nano is an 8B model optimized for edge and agentic workloads.
