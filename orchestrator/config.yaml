@@ -1,0 +1,24 @@
+models:
+  router: llama3.2:latest
+
+workflows:
+  coding:
+    workers:
+      - { provider: ollama, model: qwen2.5:7b, role: solver }
+      - { provider: ollama, model: llama3:latest, role: verifier }
+
+  reasoning:
+    workers:
+      - { provider: ollama, model: qwen2.5:14b-instruct, role: solver }
+      - { provider: ollama, model: llama3:latest, role: critic }
+
+  science:
+    workers:
+      - { provider: ollama, model: qwen2.5:14b-instruct, role: solver }
+      - { provider: ollama, model: llama3:latest, role: verifier }
+
+  rag_qa:
+    workers:
+      - { provider: ollama, model: qwen2.5:7b, role: retriever }
+      - { provider: ollama, model: qwen2.5:7b, role: solver }
+      - { provider: ollama, model: llama3:latest, role: verifier }

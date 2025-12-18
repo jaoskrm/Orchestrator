@@ -19,7 +19,20 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Project-specific
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# Env / secrets
+.env
+.env.*
+
+# Project-specific outputs
 traces/
-runs/*/tests/__pycache__/
-sandbox/.pytest_cache/
+runs/*
+!runs/README.md
+!runs/**/.gitkeep
