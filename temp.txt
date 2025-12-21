@@ -1,178 +1,269 @@
-Great—next step is to build the smallest working “agent loop” that uses your Docker sandbox for verification, then expand into multi-model orchestration.
+Great, this is a good moment to **lock the direction** before touching code. I’ll treat **your current repo as the baseline** and outline a **clear, staged plan** that directly answers:
 
-## Project skeleton
+> “what’s the current plan starting from this version as the base”
 
-Create this structure in your repo:
+No implementation yet — only **architecture, responsibilities, and sequencing**.
+
+---
+
+## 0️⃣ Baseline: What your system already does well
+
+From the traces + code you shared, your orchestrator already has these strengths:
+
+* ✅ **Deterministic structure enforcement**
+
+  * `# === IMPLEMENTATION ===` / `# === TESTS ===`
+* ✅ **Round-based retries**
+* ✅ **Docker-isolated pytest execution**
+* ✅ **Trace observability**
+* ✅ **Verifier feedback loop**
+* ❌ **Stateless retries (full regeneration every time)**
+* ❌ **No failure classification**
+* ❌ **No locality awareness**
+* ❌ **Prompt-only “fixes” instead of system guarantees**
+
+Everything we add should **preserve these strengths** and only evolve the weak points.
+
+---
+
+## 1️⃣ Core architectural shift (the big idea)
+
+### From:
+
+> “Generate → Test → Fail → Regenerate everything”
+
+### To:
+
+> **“Generate → Freeze → Diagnose → Patch → Re-test”**
+
+This introduces **code as a first-class artifact**, not a disposable string.
+
+---
+
+## 2️⃣ New conceptual layers (no code yet)
+
+### A. Stable Code Artifact (central concept)
+
+Treat the solver output as a **mutable document with identity**, not a throwaway.
+
+Logical structure:
+
 ```
-orchestrator/
-  app.py
-  config.py
-  llm_clients.py
-  runner/
-    docker_runner.py
-  workflows/
-    coding.py
-    reasoning.py
-    science.py
-    rag_qa.py
-  judge/
-    judge.py
-  storage/
-    traces.py
-runs/
-sandbox/
-```
-
-## Step 1: Docker runner module (core tool)
-
-Create `orchestrator/runner/docker_runner.py`:
-```python
-import subprocess
-from dataclasses import dataclass
-from pathlib import Path
-
-@dataclass
-class RunResult:
-    exit_code: int
-    stdout: str
-    stderr: str
-
-class DockerSandbox:
-    def __init__(self, container_name: str = "agent-sandbox"):
-        self.container = container_name
-
-    def reset_task_dir(self) -> None:
-        subprocess.run(
-            ["docker", "exec", self.container, "sh", "-lc", "rm -rf /work/task/*"],
-            check=True
-        )
-
-    def copy_task_in(self, task_dir: Path) -> None:
-        # Copy the CONTENTS of task_dir into /work/task
-        src = str(task_dir / ".")
-        subprocess.run(["docker", "cp", src, f"{self.container}:/work/task"], check=True)
-
-    def pytest(self) -> RunResult:
-        p = subprocess.run(
-            ["docker", "exec", self.container, "sh", "-lc",
-             "cd /work/task && python -m pytest -q -p no:cacheprovider"],
-            capture_output=True, text=True
-        )
-        return RunResult(p.returncode, p.stdout, p.stderr)
+CodeArtifact
+├── implementation (string / AST)
+├── tests (string / AST)
+├── invariants
+│   ├── public API signatures
+│   ├── section markers
+│   ├── tests that already pass
 ```
 
-## Step 2: Minimal “coding workflow” (generate → test → fix)
+**Invariant rule:**
+Anything that already passes must not be broken by patches.
 
-Create `orchestrator/workflows/coding.py`:
-```python
-from pathlib import Path
-from orchestrator.runner.docker_runner import DockerSandbox
+---
 
-def run_coding_task(task_id: str) -> dict:
-    task_dir = Path("runs") / task_id
-    sb = DockerSandbox()
+### B. Failure Classification (formalized)
 
-    sb.reset_task_dir()
-    sb.copy_task_in(task_dir)
-    res = sb.pytest()
+You already identified the right 4 classes. Now we **operationalize them**.
 
-    return {
-        "task_id": task_id,
-        "passed": res.exit_code == 0,
-        "stdout": res.stdout,
-        "stderr": res.stderr,
-    }
+| Failure Class      | Definition                         | Typical Symptoms                   |
+| ------------------ | ---------------------------------- | ---------------------------------- |
+| **FORMAT**         | Code cannot be parsed/imported     | SyntaxError, stray ```             |
+| **CONTRACT**       | Input/output expectations violated | Missing TypeError, wrong exception |
+| **RUNTIME SAFETY** | Unsafe access                      | `.lower()` on None, index error    |
+| **LOGIC**          | Wrong computation                  | Incorrect prime result             |
+
+---
+
+## 3️⃣ Decision matrix (this is the heart)
+
+### Immediate rejection vs refinement
+
+| Failure Class      | Action               | Reason                   |
+| ------------------ | -------------------- | ------------------------ |
+| **FORMAT**         | ❌ Reject immediately | No stable AST to patch   |
+| **CONTRACT**       | 🔁 Patch             | Usually guard clauses    |
+| **RUNTIME SAFETY** | 🔁 Patch             | Highly local, mechanical |
+| **LOGIC**          | 🔁 Patch             | Function-level edits     |
+
+Only **FORMAT** forces full regeneration.
+
+Everything else attempts **patch-based refinement first**.
+
+---
+
+## 4️⃣ Refinement philosophy (non-hardcoded, scalable)
+
+You were absolutely right to reject “hardcoded rules like `if category is not None`”.
+
+Instead, we rely on **derived constraints**, not fixed ones.
+
+### Example (from your trace)
+
+Failure:
+
+```
+AttributeError: 'NoneType' object has no attribute 'lower'
 ```
 
-Create `orchestrator/app.py`:
-```python
-from orchestrator.workflows.coding import run_coding_task
+System inference (not prompt hardcoding):
 
-if __name__ == "__main__":
-    out = run_coding_task("task_001")
-    print(out["stdout"])
-    if not out["passed"]:
-        print(out["stderr"])
+* Input type includes Optional
+* Operation requires non-null
+* Missing guard
+
+→ Classified as **RUNTIME SAFETY**
+
+→ Allowed patch scope:
+
+```
+Add minimal guard before unsafe access
 ```
 
-Run:
-```powershell
-python -m orchestrator.app
-```
+This scales to:
 
-At this point, you have the most important foundation: a repeatable verification loop.
+* dict access
+* index access
+* division
+* optional attributes
+* file handles
+* etc.
 
-## Step 3: Add the first real orchestrator decision
+No domain-specific hacks.
 
-Next, you’ll add:
-- `llm_clients.py` to call your API models (OpenAI/Anthropic/Groq/etc.)
-- A routing function: `route(task) -> workflow + top_k_models`
-- A judge that scores multiple candidate solutions and produces “preference pairs” for later training
+---
 
-## What’s needed from you to continue
-Answer these so the code can be made concrete:
+## 5️⃣ Failure locality (why patches work)
 
-1) Which API provider(s) will you use first (OpenAI, Anthropic, Google, Groq, Together, etc.)?
-2) Do you want to start with **one** orchestrator model (simpler) or **two** (cost-first + quality-first) from day 1?
-3) For `runs/task_002`, do you want the system to **generate tests automatically**, or will you provide tests yourself initially?
+Your traces already contain enough signal.
 
+Minimum viable locality:
 
+1. Parse pytest output:
 
+   * failing test name
+   * traceback line number
+2. Map line → owning function
+3. Restrict edits to:
 
+   * that function body
+   * or that validation block
 
+Future upgrade:
 
+* AST-based node replacement (safe, precise)
 
+---
 
+## 6️⃣ Patch policy (what is allowed to change)
 
+This prevents regressions and solver chaos.
 
+### Per failure class:
 
+#### CONTRACT
 
+Allowed:
 
+* Input validation
+* Exception type/message
+  Forbidden:
+* Algorithm rewrite
+* Test changes
 
+#### RUNTIME SAFETY
 
+Allowed:
 
+* Guard clauses
+* Short-circuit returns
+  Forbidden:
+* Logic refactors
 
+#### LOGIC
 
+Allowed:
 
+* Arithmetic / condition changes inside function
+  Forbidden:
+* Signature changes
+* Test edits
+* Guard removal
 
+---
 
+## 7️⃣ Retry escalation ladder (important)
 
-ALLOWED_WORKFLOWS = {"coding", "reasoning", "science", "rag_qa"}
-ALLOWED_ROLES = {"solver", "critic", "verifier", "retriever"}
-ALLOWED_PROVIDERS = {"ollama", "openai", "anthropic", "gemini", "groq"}
+Refinement should **escalate slowly**, never jump.
 
-ALLOWED_OLLAMA_MODELS = {"llama3.2:latest", "qwen2.5:7b", "llama3:latest"}
-After parsing:
+1. Patch implementation only
+2. Retry tests
+3. If same failure repeats → stronger constraint
+4. If failure set unchanged after N patches → regenerate implementation only
+5. Absolute last resort → full regeneration
 
-python
-wf = decision.get("workflow")
-if wf not in ALLOWED_WORKFLOWS:
-    raise ValueError(f"Invalid workflow: {wf}")
+This fixes the “stuck loop” seen in your prime-number trace.
 
-# Fill defaults
-decision.setdefault("workers", DEFAULT_WORKERS.get(wf, []))
-decision.setdefault("tools", {"python_sandbox": False, "rag": False})
-decision.setdefault("controls", {"use_debate": False, "max_rounds": 1})
+---
 
-# Validate workers
-clean_workers = []
-for w in decision["workers"]:
-    if w.get("provider") not in ALLOWED_PROVIDERS:
-        continue
-    if w.get("role") not in ALLOWED_ROLES:
-        continue
-    if w["provider"] == "ollama" and w.get("model") not in ALLOWED_OLLAMA_MODELS:
-        continue
-    clean_workers.append(w)
+## 8️⃣ Prompt evolution (conceptual, not text yet)
 
-# If router produced junk, fall back to defaults
-if not clean_workers:
-    clean_workers = DEFAULT_WORKERS.get(wf, [])
-decision["workers"] = clean_workers
+Prompts stop saying:
 
-# Normalize controls
-decision["controls"]["max_rounds"] = max(1, min(int(decision["controls"].get("max_rounds", 1)), 4))
+> “Rewrite code fixing errors”
 
+They start saying:
 
+> “Here is the current code.
+> Apply the smallest possible change to fix **this exact failure**.
+> You may not modify unrelated functions.”
 
+This aligns the model with **editor behavior**, not author behavior.
 
+---
+
+## 9️⃣ Where this fits in your repo (high-level)
+
+Conceptually:
+
+* `workflows/coding.py`
+
+  * becomes **artifact manager**
+* `judge/judge.py`
+
+  * becomes **failure classifier**
+* new internal concept (not file yet):
+
+  * `PatchPlan`
+  * `FailureClass`
+  * `EditScope`
+
+No UI, CLI, runner, or storage changes needed initially.
+
+---
+
+## 🔟 Current plan summary (TL;DR)
+
+Starting from **this exact version**, the plan is:
+
+1. **Freeze solver output as a persistent artifact**
+2. **Classify pytest failures into 4 types**
+3. **Reject FORMAT failures immediately**
+4. **Patch, don’t regenerate, for others**
+5. **Restrict edits by failure class**
+6. **Escalate only when refinement fails**
+7. **Only later add AST enforcement**
+
+This is **how you turn an LLM from a writer into a maintainer**.
+
+---
+
+### Next question for you (conceptual, not coding):
+
+Do you want the **first refinement implementation** to be:
+
+* **Text-diff based** (simpler, faster)
+* or **AST-node based** (safer, harder, but future-proof)?
+
+Your answer determines the next design layer.

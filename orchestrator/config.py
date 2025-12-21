@@ -13,7 +13,7 @@ ROUTER_MODEL = "llama3.2:latest"
 
 DEFAULT_WORKERS: Dict[str, list[dict[str, Any]]] = {
     "coding": [
-        {"provider": "ollama", "model": "qwen2.5:7b", "role": "solver"},
+        {"provider": "ollama", "model": "deepseek-coder-v2:16b", "role": "solver"},  # ✅ NEW
         {"provider": "ollama", "model": "llama3:latest", "role": "verifier"},
     ],
     "reasoning": [

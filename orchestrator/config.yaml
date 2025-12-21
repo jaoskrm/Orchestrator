@@ -4,7 +4,7 @@ models:
 workflows:
   coding:
     workers:
-      - { provider: ollama, model: qwen2.5:7b, role: solver }
+      - { provider: ollama, model: deepseek-coder-v2:16b, role: solver } 
       - { provider: ollama, model: llama3:latest, role: verifier }
 
   reasoning:

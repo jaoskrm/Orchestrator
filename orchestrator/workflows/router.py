@@ -55,7 +55,7 @@ Output JSON only - no other text.
 EXAMPLE_1 = {
     "workflow": "coding",
     "workers": [
-        {"provider": "ollama", "model": "qwen2.5:7b", "role": "solver"},
+        {"provider": "ollama", "model": "deepseek-coder-v2:16b", "role": "solver"}, 
         {"provider": "ollama", "model": "llama3:latest", "role": "verifier"},
     ],
     "tools": {"python_sandbox": True, "rag": False},
@@ -207,8 +207,8 @@ def route_task(user_task: str, workflow_override: Optional[str] = None) -> Dict[
         workers = config.get_workers(wf)  # ✅ Fixed: removed second argument
     tools.setdefault("python_sandbox", False)
     tools.setdefault("rag", False)
-    controls.setdefault("use_debate", False)
-    controls.setdefault("max_rounds", 1)
+    controls.setdefault("use_debate", True)
+    controls.setdefault("max_rounds", 3)
 
     decision["workers"] = workers
     decision["tools"] = tools
@@ -247,6 +247,8 @@ def route_task(user_task: str, workflow_override: Optional[str] = None) -> Dict[
     if wf == "coding":
         decision["tools"]["python_sandbox"] = True
         decision["tools"]["rag"] = False
+        decision["controls"]["max_rounds"] = max(3, decision["controls"].get("max_rounds", 3))
+        decision["controls"]["use_debate"] = True
 
         if not _has_role(decision["workers"], "solver"):
             decision["workers"] = config.get_workers("coding") + decision["workers"]
